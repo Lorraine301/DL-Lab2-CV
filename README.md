@@ -175,9 +175,110 @@ La loss totale est la somme de 4 termes (RPN objectness, RPN box, classifieur, r
   avec un IoU moyen de 0.924) et son accuracy de 98,18 % reste élevée malgré un entraînement
   réduit. Il serait pertinent pour des images contenant plusieurs objets ou des chiffres à
   localiser, pas pour MNIST seul.
-- Pour la classification pure sur MNIST, le CNN est le meilleur compromis précision / coût.
-### 1.4 Fine-tuning (VGG16, AlexNet)
-_À compléter._
+  
+### 1.4 Fine-tuning de VGG16 et AlexNet
+
+**Principe.** Les deux modèles sont chargés avec leurs poids pré-entraînés sur ImageNet
+(torchvision). Seule la dernière couche est remplacée (4096 → 10 classes au lieu de 1000),
+puis **toutes les couches sont ré-entraînées** sur MNIST avec un faible learning rate.
+
+**Adaptation des entrées.** Les images 28×28 en niveaux de gris sont agrandies à 64×64
+(interpolation bilinéaire), répétées sur 3 canaux et normalisées avec les statistiques
+ImageNet (moyenne [0.485, 0.456, 0.406], écart-type [0.229, 0.224, 0.225]).
+
+**Hyperparamètres (identiques pour les deux modèles).**
+
+| Paramètre | Valeur |
+|---|---|
+| Optimiseur | Adam, lr = 1e-4, weight decay 1e-4 |
+| Perte | CrossEntropyLoss |
+| Batch size | 64 |
+| Époques | 3 |
+| Précision mixte (AMP) | oui |
+| Données | 15 000 images d'entraînement, 1 000 de validation, 10 000 de test |
+| Matériel | GPU Tesla T4 (Kaggle) |
+
+Les données d'entraînement sont les mêmes que pour Faster R-CNN (même découpage, graine 42).
+
+**Suivi de l'entraînement.**
+
+| Modèle | Époque | Loss train | Loss val | Accuracy val | F1 val | Temps cumulé |
+|---|---|---|---|---|---|---|
+| AlexNet | 1 | 0.3103 | 0.0812 | 97.20 % | 97.15 % | 8 s |
+| AlexNet | 2 | 0.0724 | 0.0548 | 98.30 % | 98.27 % | 16 s |
+| AlexNet | 3 | 0.0433 | 0.0447 | 98.50 % | 98.52 % | 24 s |
+| VGG16 | 1 | 0.2051 | 0.0828 | 97.90 % | 97.90 % | 27 s |
+| VGG16 | 2 | 0.0489 | 0.0963 | 97.50 % | 97.54 % | 53 s |
+| VGG16 | 3 | 0.0346 | 0.0830 | 98.70 % | 98.69 % | 78 s |
+
+**Résultats sur le jeu de test (10 000 images).**
+
+| Modèle | Accuracy | F1 (macro) | Loss | Temps | Paramètres | Images mal classées |
+|---|---|---|---|---|---|---|
+| AlexNet (FT) | 98.19 % | 98.19 % | 0.0646 | 24.4 s | 57 044 810 | 181 |
+| VGG16 (FT) | 98.96 % | 98.96 % | 0.0425 | 77.7 s | 134 301 514 | 104 |
+
+**Courbes et matrices de confusion.**
+![AlexNet courbes](results/alexnet_curves.png) ![AlexNet confusion](results/alexnet_confusion.png)
+![VGG16 courbes](results/vgg16_curves.png) ![VGG16 confusion](results/vgg16_confusion.png)
+
+**Analyse.**
+
+- **Convergence rapide grâce au pré-entraînement.** Dès la première époque, VGG16 atteint 97,9 %
+  et AlexNet 97,2 % d'accuracy en validation, alors que le CNN from scratch partait de 98,0 %
+  mais avec 54 000 images. Les filtres appris sur ImageNet (bords, textures) se transfèrent bien
+  aux chiffres, même si ImageNet contient des photos en couleur et MNIST des chiffres noir et blanc.
+- **VGG16 bien meilleur qu'AlexNet** (+0.77 point d'accuracy, 104 erreurs contre 181), au prix
+  d'un temps d'entraînement 3,2 fois plus long et de 2,4 fois plus de paramètres. Sa profondeur
+  (16 couches, filtres 3×3 empilés) lui donne une représentation plus riche qu'AlexNet (8 couches).
+- **Erreurs.** Pour AlexNet, les confusions principales sont 0 → 2 (15 cas), 9 → 8 (14 cas),
+  0 → 6 (10 cas), 1 → 7 (9 cas), 7 → 2 (9 cas) et 6 → 8 (9 cas). Pour VGG16, la principale
+  est 4 → 9 (19 cas), suivie de 5 → 3 (8 cas).
+- **Stabilité.** La validation de VGG16 est irrégulière (accuracy 97,9 % → 97,5 % → 98,7 %, loss
+  0.0828 → 0.0963 → 0.0830). Les ensembles de validation ne comptant que 1 000 images, ces
+  variations de quelques dixièmes de point sont à interpréter avec prudence. Le test sur
+  10 000 images est plus fiable (AlexNet : 98,50 % en validation contre 98,19 % en test).
+- **Limites.** Une seule exécution (graine 42), 3 époques seulement, sans recherche d'hyperparamètres
+  ni gel de couches.
+
+### Comparaison finale de la partie 1
+
+| Modèle | Accuracy | F1 (macro) | Loss | Temps | Paramètres | Données / époques |
+|---|---|---|---|---|---|---|
+| **CNN (from scratch)** | **99.04 %** | **99.03 %** | 0.0289 | 22.6 s | **421 834** | 54 000 / 10 |
+| Faster R-CNN | 98.18 % | 98.17 % | 0.1250* | 395.4 s | 28 329 606 | 15 000 / 3 |
+| AlexNet (fine-tuné) | 98.19 % | 98.19 % | 0.0646 | 24.4 s | 57 044 810 | 15 000 / 3 |
+| VGG16 (fine-tuné) | 98.96 % | 98.96 % | 0.0425 | 77.7 s | 134 301 514 | 15 000 / 3 |
+
+\*Somme de 4 termes (RPN et tête de détection), mesurée sur 2 000 images : non comparable
+aux cross-entropies des autres modèles.
+
+![Comparaison](results/comparison_part1.png)
+
+**Conclusion de la partie 1.**
+
+- **Classement par accuracy** : CNN (99,04 %) > VGG16 (98,96 %) > AlexNet (98,19 %) ≈ Faster R-CNN
+  (98,18 %).
+- **CNN et VGG16 sont équivalents en pratique** : l'écart est de 8 images sur 10 000. Pour une
+  seule exécution, il est du même ordre que la variabilité statistique (environ ±0.1 point à
+  99 % d'accuracy sur 10 000 images), donc on ne peut pas conclure que l'un est meilleur.
+  En revanche, VGG16 atteint ce niveau en voyant **3,6 fois moins de données et 3 fois moins
+  d'époques**, ce qui illustre l'intérêt du transfert d'apprentissage lorsque les données sont limitées.
+- **Le coût est très différent.** Le CNN from scratch obtient le meilleur résultat avec
+  **318 fois moins de paramètres que VGG16** et 135 fois moins qu'AlexNet. Sur MNIST, jeu simple
+  et propre, une petite architecture dédiée suffit : les grands modèles pré-entraînés n'apportent
+  pas de gain de précision, mais seulement une convergence plus rapide en nombre d'époques.
+- **Faster R-CNN est le moins adapté** à cette tâche : 17 fois plus lent que le CNN, avec une
+  précision inférieure, car la détection d'objets (propositions de régions, boîtes) est inutile
+  pour classer une image qui ne contient qu'un chiffre. Son seul avantage est la localisation
+  (IoU moyen 0.924).
+- **Recommandation.** Pour classifier MNIST : le CNN from scratch (meilleur compromis
+  précision / coût). Si les données d'entraînement étaient rares, le fine-tuning de VGG16
+  serait préférable. AlexNet est peu avantageux : il n'est que légèrement plus rapide que VGG16
+  mais nettement moins précis.
+- **Précaution.** Les conditions d'entraînement diffèrent (le CNN a vu plus de données et
+  d'époques) : la comparaison reflète donc des compromis pratiques, pas des capacités
+  intrinsèques des architectures.
 
 ## Partie 2 : Vision Transformer (ViT)
 _À compléter._
